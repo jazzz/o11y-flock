@@ -1,0 +1,10 @@
+/target
+/result
+# logos-delivery message store, written to the working directory
+data/
+# The owl's instance ID, written to the working directory
+/instance
+# Local runs without Docker: the flock key, and each owl's directory.
+/run/
+# ROOST_URL and FLOCK_KEY for deploy/compose.owls.yml
+deploy/.env

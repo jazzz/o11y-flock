@@ -1,0 +1,49 @@
+# Owls only, for any machine that can reach roost. Every owl uses the same
+# flock key. roost gives each owl container one of the named owls, which it
+# keeps through restarts and recreation; owlet containers are extras, with
+# names roost hands out and takes back.
+#
+#   # in deploy/.env:
+#   #   ROOST_URL=http://<roost's address>:30117
+#   #   FLOCK_KEY=...         the same key roost has
+#   #   OWL_OPERATOR=...      who runs these owls: your name or handle
+#   docker compose -f deploy/compose.owls.yml up -d --scale owl=10
+#   # extras; naming the service leaves the owls alone:
+#   docker compose -f deploy/compose.owls.yml up -d --scale owlet=20 owlet
+#   docker compose -f deploy/compose.owls.yml rm -sf owlet
+#
+# up pulls the image, which CI publishes for amd64 and arm64
+# (.github/workflows/owl-image.yml); OWL_IMAGE=ghcr.io/jazzz/flock-owl:sha-<rev>
+# pins one build. If it can't pull, or with up --build, it builds the image
+# here, compiling liblogosdelivery inside Nix, which takes a while. Don't push
+# a local build: it would replace CI's multi-arch :latest with one arch.
+name: flock-owls
+
+x-owl: &owl
+  build:
+    context: ..
+    dockerfile: docker/owl.Dockerfile
+    # OWL_REV=$(git rev-parse --short=12 HEAD) docker compose ... up --build
+    args: { OWL_REV: "${OWL_REV:-unknown}" }
+  image: "${OWL_IMAGE:-ghcr.io/jazzz/flock-owl:latest}"
+  restart: unless-stopped
+  # Time to stop sending and flush its reports.
+  stop_grace_period: 30s
+  environment: &env
+    ROOST_URL: "${ROOST_URL:?put ROOST_URL in deploy/.env}"
+    FLOCK_KEY: "${FLOCK_KEY:?put FLOCK_KEY in deploy/.env}"
+    OWL_OPERATOR: "${OWL_OPERATOR:?put OWL_OPERATOR, who runs these owls, in deploy/.env}"
+
+services:
+  owl:
+    <<: *owl
+    deploy:
+      replicas: ${OWLS:-1}
+
+  owlet:
+    <<: *owl
+    environment:
+      <<: *env
+      OWL_EPHEMERAL: "true"
+    deploy:
+      replicas: ${OWLETS:-0}

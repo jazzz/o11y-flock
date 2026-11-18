@@ -1,0 +1,23 @@
+[package]
+name = "owl"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+flock-proto = { workspace = true }
+
+# libchat
+crypto = { workspace = true }
+logos-chat = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+crc32fast = { workspace = true }
+hex = "0.4"
+rand = "0.9"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+ureq = { version = "2", features = ["json"] }
+signal-hook = "0.3"

@@ -1,0 +1,11 @@
+[package]
+name = "flock-proto"
+edition = "2024"
+version = "0.1.0"
+description = "The contract between flock's owls and roost, their management node"
+
+# Self-contained, not inherited from the workspace, so roost can use it from
+# outside this repo.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
