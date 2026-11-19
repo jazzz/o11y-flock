@@ -1,8 +1,8 @@
 # How owls work
 
-To run owls, see the [README](../README.md). This page explains how owls get
-their names, lists every setting, and covers running owls without Docker and
-building the owl.
+To run an owl, see the [README](../README.md). This page explains how owls
+get their names and lists every setting. It also covers running owls with
+Docker Compose or without Docker, and building the owl.
 
 ## Names
 
@@ -53,11 +53,16 @@ depending on its kind:
 
 ### In Docker
 
-In Docker, the owl's working directory is a volume. The instance ID
-survives the container restarting, and survives `docker compose up`
-replacing the container. `docker compose down` deletes the containers. The
-next `up` then creates new volumes, so the owls get new instance IDs and new
-names.
+In Docker, the owl's working directory, `/var/lib/owl`, is a volume.
+
+- **`docker run -v owl-1:/var/lib/owl`**, as in the README, names the
+  volume. The volume stays when you delete the container, so the next
+  `docker run` with the same volume gets the same instance ID and the same
+  name.
+- **Docker Compose** gives each container an unnamed volume. The volume
+  survives `docker compose up` replacing the container. `docker compose
+  down` deletes the containers, and the next `up` creates new volumes, so
+  the owls get new instance IDs and new names.
 
 ## Pausing
 
@@ -83,23 +88,67 @@ The owl reads these environment variables:
 | `OWL_INSTANCE` | The instance ID to use instead of the one in the file `instance`. |
 | `DELIVERY_LOG_LEVEL` | The log level of the logos-delivery node inside the owl. Default `ERROR`. |
 
-[compose.owls.yml](../deploy/compose.owls.yml) also reads these:
+With `docker run`, pass each one as `-e NAME=value`. With Docker Compose,
+set `ROOST_URL`, `FLOCK_KEY` and `OWL_OPERATOR` in the file `.env`, next to
+the compose file.
 
-| Variable | Meaning |
-|---|---|
-| `OWLS` | The number of named owls that `up` runs. Default 1. |
-| `OWLETS` | The number of ephemeral owls that `up` runs. Default 0. |
-| `OWL_IMAGE` | The owl image. Default `ghcr.io/jazzz/flock-owl:latest`. |
+## Running owls with Docker Compose
 
-Docker Compose reads these variables from the file `deploy/.env` and from
-your shell. A value set in your shell wins over the file. Compose requires
-`ROOST_URL`, `FLOCK_KEY` and `OWL_OPERATOR` for every command, including
-`ps` and `stop`. Without the file, you have to set all three in your shell
-before each command.
+[compose.owls.yml](../deploy/compose.owls.yml) runs several owls at once.
+It works on its own, without the rest of the repository:
 
-`--scale owl=10` runs 10 named owls whatever `OWLS` says. The next `up`
-without `--scale` goes back to the number in `OWLS`. `--scale owlet=N` does
-the same for ephemeral owls and `OWLETS`.
+```sh
+mkdir flock-owls && cd flock-owls
+curl -fsSL -o compose.yaml https://raw.githubusercontent.com/jazzz/o11y-flock/main/deploy/compose.owls.yml
+curl -fsSL -o .env https://raw.githubusercontent.com/jazzz/o11y-flock/main/deploy/.env.example
+```
+
+Open `.env` and fill in roost's address, the flock key and your name.
+`OWLS` sets how many named owls to run. Never commit `.env`: it holds the
+flock key.
+
+Until all three values are filled in, `docker compose` refuses to start and
+names the missing one. A wrong value still lets the owls start, but they
+can't reach roost. Their logs show `Dns Failed` for the address, or
+`status code 401` for the key.
+
+Then run these commands in that directory:
+
+```sh
+docker compose up -d     # start the owls
+docker compose ps        # list them
+docker compose logs -f   # watch their logs
+docker compose stop      # stop them; `up -d` starts them again, with the same names
+```
+
+**Don't run `docker compose down`.** It deletes the containers, and the
+owls that the next `up` starts get new names. roost holds each old name for
+a week.
+
+To update the owls to the newest build:
+
+```sh
+docker compose pull && docker compose up -d
+```
+
+The updated owls keep their names.
+
+Ephemeral owls run in the service `owlet`:
+
+```sh
+docker compose up -d --scale owlet=20 owlet   # run 20 ephemeral owls
+docker compose rm -sf owlet                   # stop and delete every ephemeral owl
+```
+
+`--scale owlet=20` sets how many ephemeral owls run. The final `owlet`
+limits the command to ephemeral owls, so it leaves the other owls alone.
+`--scale` lasts until the next `up` without it, which goes back to `OWLS`
+named owls and no ephemeral owls. To keep some ephemeral owls running
+instead, add `OWLETS=20` (or however many) to `.env`.
+
+The file names its Compose project `flock-owls`, the same on every machine.
+So a machine has one set of these owls, and every `docker compose` command
+that uses this file acts on that set, whichever directory it runs in.
 
 ## The owl image
 
@@ -112,15 +161,11 @@ CI builds the image `ghcr.io/jazzz/flock-owl` for amd64 and arm64, in
 | `:sha-<12 hex>` | the same commits, and every release. This matches the `OWL_REV` that each owl reports to roost. |
 | `:1.2.3`, `:1.2` | the git tag `v1.2.3` |
 
-To keep every machine on the same owl, set `OWL_IMAGE` to a sha tag or a
-release tag.
-
-If `docker compose up` can't download the image, or you run `up --build`,
-Compose builds the image on your machine. The build compiles liblogosdelivery
-inside Nix. It takes a long time and needs a lot of free disk space. Don't
-push an image you built yourself. It would replace CI's `:latest`, which
-works on amd64 and arm64, with an image for your machine's architecture
-only.
+The README's commands and compose.owls.yml use `:latest`. Docker downloads
+an image once and keeps using that copy, so each machine runs the build it
+last downloaded, until someone runs the update commands. roost's dashboard
+shows which build each owl runs. To keep a machine on one build, use a sha
+tag in place of `latest`.
 
 ## Running owls without Docker
 
@@ -161,3 +206,17 @@ LOGOS_DELIVERY_LIB_DIR=/path/to/libchat/result/lib cargo build --release -p owl
 
 Without `LOGOS_DELIVERY_LIB_DIR`, libchat's build script runs `nix build`
 itself.
+
+To build the image on your own machine:
+
+```sh
+docker build -f docker/owl.Dockerfile --build-arg OWL_REV=$(git rev-parse --short=12 HEAD) -t flock-owl:local .
+```
+
+The build compiles liblogosdelivery inside Nix. It takes a long time and
+needs a lot of free disk space. To run the result, use `flock-owl:local` in
+place of the image name, in the `docker run` command or on the compose
+file's `image:` line.
+Don't push an image you built yourself. It would replace CI's `:latest`,
+which works on amd64 and arm64, with an image for your machine's
+architecture only.

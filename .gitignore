@@ -6,5 +6,8 @@ data/
 /instance
 # Local runs without Docker: the flock key, and each owl's directory.
 /run/
-# ROOST_URL and FLOCK_KEY for deploy/compose.owls.yml
-deploy/.env
+# Docker Compose settings, with the flock key: deploy/.env, or a .env next to
+# a downloaded compose file. deploy/.env.example is the template.
+.env
+# A downloaded compose file
+/compose.yaml

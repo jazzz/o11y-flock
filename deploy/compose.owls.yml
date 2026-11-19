@@ -1,49 +1,55 @@
-# Runs owls in Docker, on any machine that can reach roost. README.md shows
-# how; docs/owls.md explains the settings.
+# Runs flock owls in Docker: https://github.com/jazzz/o11y-flock
 #
-# Two services:
-#   owl    named owls. roost gives each container a name such as barn-01,
-#          and the container keeps that name when it restarts or `up`
-#          replaces it.
-#   owlet  ephemeral owls. roost gives each container a name such as
-#          owlet-01, and can give that name to another ephemeral owl two
-#          minutes after the container stops.
+# 1. Download this file as compose.yaml, and the example settings as .env:
+#      curl -fsSLo compose.yaml https://raw.githubusercontent.com/jazzz/o11y-flock/main/deploy/compose.owls.yml
+#      curl -fsSLo .env https://raw.githubusercontent.com/jazzz/o11y-flock/main/deploy/.env.example
+# 2. In .env, fill in roost's address, the flock key and your name, and set
+#    how many owls to run. Never commit .env: it holds the flock key.
+# 3. In the same directory, run:
+#      docker compose up -d
 #
-# Compose reads ROOST_URL, FLOCK_KEY and OWL_OPERATOR from deploy/.env or
-# from the shell.
+# Compose reads .env from the compose file's directory. Until the three
+# values are filled in, it refuses to start and names the one missing.
+
+x-settings: &settings
+  ROOST_URL: "${ROOST_URL:?set ROOST_URL, roost's address, in .env}"
+  FLOCK_KEY: "${FLOCK_KEY:?set FLOCK_KEY, the flock key, in .env}"
+  OWL_OPERATOR: "${OWL_OPERATOR:?set OWL_OPERATOR, your name or handle, in .env}"
+
+# Named owls: roost gives each owl container a name such as barn-01, and the
+# container keeps that name when it restarts or `up` replaces it.
 #
-# `up` downloads the image that CI builds for amd64 and arm64
-# (.github/workflows/owl-image.yml). If the download fails, or with
-# `up --build`, Compose builds the image here, which takes a long time and a
-# lot of disk. Don't push an image built here: it would replace CI's :latest,
-# which works on amd64 and arm64, with one for this machine only.
+# Ephemeral owls: roost gives each owlet container a name such as owlet-01,
+# and can give that name to another ephemeral owl two minutes after the
+# container stops.
+#
+# docs/owls.md in the repository explains the rest.
+
 name: flock-owls
 
 x-owl: &owl
-  build:
-    context: ..
-    dockerfile: docker/owl.Dockerfile
-    # OWL_REV=$(git rev-parse --short=12 HEAD) docker compose ... up --build
-    args: { OWL_REV: "${OWL_REV:-unknown}" }
-  image: "${OWL_IMAGE:-ghcr.io/jazzz/flock-owl:latest}"
+  # The newest owl, which CI builds for amd64 and arm64. Docker downloads it
+  # once and keeps that copy. To update the owls to the newest build, run:
+  #   docker compose pull && docker compose up -d
+  image: ghcr.io/jazzz/flock-owl:latest
   restart: unless-stopped
   # Time to stop sending and flush its reports.
   stop_grace_period: 30s
-  environment: &env
-    ROOST_URL: "${ROOST_URL:?set ROOST_URL in deploy/.env; see README.md}"
-    FLOCK_KEY: "${FLOCK_KEY:?set FLOCK_KEY in deploy/.env; see README.md}"
-    OWL_OPERATOR: "${OWL_OPERATOR:?set OWL_OPERATOR, your name or handle, in deploy/.env; see README.md}"
+  environment: *settings
 
 services:
   owl:
     <<: *owl
     deploy:
-      replicas: ${OWLS:-1}
+      # OWLS in .env
+      replicas: ${OWLS:-5}
 
   owlet:
     <<: *owl
     environment:
-      <<: *env
+      <<: *settings
       OWL_EPHEMERAL: "true"
     deploy:
+      # None unless started for a while:
+      #   docker compose up -d --scale owlet=20 owlet
       replicas: ${OWLETS:-0}

@@ -3,8 +3,10 @@ run
 data
 instance
 .git
-# Not part of the image; keeps deploy/.env (the flock key) out of the build,
-# and edits to these out of the build cache.
+# Not part of the image; keeps edits to these out of the build cache.
 deploy
 .github
 *.md
+# A downloaded compose file, and the .env next to it with the flock key.
+compose.yaml
+.env
