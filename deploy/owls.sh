@@ -6,13 +6,12 @@
 #
 #   run/flock.key    the flock key, unless FLOCK_KEY is set
 #   run/owl-N/       owl.log, instance, data/
-#   run/owlet-N/     the same, for owlets
+#   run/owlet-N/     the same, for ephemeral owls
 #
 # Commands:
-#   deploy/owls.sh start N       make sure owls 1..N are running
-#   deploy/owls.sh owlets N      make sure owlets 1..N are running: extras,
-#                                with names roost hands out and takes back
-#   deploy/owls.sh stop [owlets] stop them all, or only the owlets
+#   deploy/owls.sh start N       make sure named owls 1..N are running
+#   deploy/owls.sh owlets N      make sure ephemeral owls 1..N are running
+#   deploy/owls.sh stop [owlets] stop every owl, or only the ephemeral owls
 #   deploy/owls.sh status        what is running
 #
 # Build first:
@@ -71,7 +70,7 @@ case "${1:-}" in
     if [ "$kind" = owl ]; then
       echo "roost gives each a named owl: the same one as before, if it had one"
     else
-      echo "roost gives each an owlet that is free, registering more as needed"
+      echo "roost gives each ephemeral owl a free owlet name, registering more as needed"
     fi
     ;;
   stop)
@@ -101,7 +100,7 @@ case "${1:-}" in
     done
     ;;
   *)
-    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
     exit 1
     ;;
 esac

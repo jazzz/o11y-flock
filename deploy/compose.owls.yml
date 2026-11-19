@@ -1,22 +1,22 @@
-# Owls only, for any machine that can reach roost. Every owl uses the same
-# flock key. roost gives each owl container one of the named owls, which it
-# keeps through restarts and recreation; owlet containers are extras, with
-# names roost hands out and takes back.
+# Runs owls in Docker, on any machine that can reach roost. README.md shows
+# how; docs/owls.md explains the settings.
 #
-#   # in deploy/.env:
-#   #   ROOST_URL=http://<roost's address>:30117
-#   #   FLOCK_KEY=...         the same key roost has
-#   #   OWL_OPERATOR=...      who runs these owls: your name or handle
-#   docker compose -f deploy/compose.owls.yml up -d --scale owl=10
-#   # extras; naming the service leaves the owls alone:
-#   docker compose -f deploy/compose.owls.yml up -d --scale owlet=20 owlet
-#   docker compose -f deploy/compose.owls.yml rm -sf owlet
+# Two services:
+#   owl    named owls. roost gives each container a name such as barn-01,
+#          and the container keeps that name when it restarts or `up`
+#          replaces it.
+#   owlet  ephemeral owls. roost gives each container a name such as
+#          owlet-01, and can give that name to another ephemeral owl two
+#          minutes after the container stops.
 #
-# up pulls the image, which CI publishes for amd64 and arm64
-# (.github/workflows/owl-image.yml); OWL_IMAGE=ghcr.io/jazzz/flock-owl:sha-<rev>
-# pins one build. If it can't pull, or with up --build, it builds the image
-# here, compiling liblogosdelivery inside Nix, which takes a while. Don't push
-# a local build: it would replace CI's multi-arch :latest with one arch.
+# Compose reads ROOST_URL, FLOCK_KEY and OWL_OPERATOR from deploy/.env or
+# from the shell.
+#
+# `up` downloads the image that CI builds for amd64 and arm64
+# (.github/workflows/owl-image.yml). If the download fails, or with
+# `up --build`, Compose builds the image here, which takes a long time and a
+# lot of disk. Don't push an image built here: it would replace CI's :latest,
+# which works on amd64 and arm64, with one for this machine only.
 name: flock-owls
 
 x-owl: &owl
@@ -30,9 +30,9 @@ x-owl: &owl
   # Time to stop sending and flush its reports.
   stop_grace_period: 30s
   environment: &env
-    ROOST_URL: "${ROOST_URL:?put ROOST_URL in deploy/.env}"
-    FLOCK_KEY: "${FLOCK_KEY:?put FLOCK_KEY in deploy/.env}"
-    OWL_OPERATOR: "${OWL_OPERATOR:?put OWL_OPERATOR, who runs these owls, in deploy/.env}"
+    ROOST_URL: "${ROOST_URL:?set ROOST_URL in deploy/.env; see README.md}"
+    FLOCK_KEY: "${FLOCK_KEY:?set FLOCK_KEY in deploy/.env; see README.md}"
+    OWL_OPERATOR: "${OWL_OPERATOR:?set OWL_OPERATOR, your name or handle, in deploy/.env; see README.md}"
 
 services:
   owl:

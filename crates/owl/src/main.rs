@@ -1,8 +1,8 @@
 //! owl: one synthetic LogosChat client.
 //!
 //! An owl gets an identity and the settings from roost with the flock key,
-//! builds its chat client on an embedded logos-delivery node, creates a group
-//! and then fuzzes group chats with the other owls until it is stopped,
+//! builds its chat client on an embedded logos-delivery node, creates a group,
+//! and then adds other owls to groups and posts to them until it is stopped,
 //! reporting what it sends, receives and sees of its groups.
 
 mod anomaly;
@@ -34,8 +34,9 @@ pub struct Args {
     /// so whoever watches the flock knows whom to ask about it.
     #[arg(long, env = "OWL_OPERATOR")]
     operator: String,
-    /// Run as an owlet: an extra, with a name roost hands out and takes back,
-    /// rather than one of the named owls, which keep theirs.
+    /// Run as an ephemeral owl: roost gives it a name such as `owlet-01`, and
+    /// can give that name to another ephemeral owl two minutes after this one
+    /// stops. Named owls keep their names.
     #[arg(long, env = "OWL_EPHEMERAL", value_parser = clap::builder::BoolishValueParser::new())]
     ephemeral: bool,
     /// The embedded logos-delivery node's log level: TRACE, DEBUG, INFO,

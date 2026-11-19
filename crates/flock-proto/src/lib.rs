@@ -8,8 +8,8 @@
 //! Each start is a new *run* of that owl.
 //!
 //! An identity is one of the named owls (`barn-01`), which an instance keeps
-//! for good, or an *owlet* (`owlet-01`): an extra, whose name roost hands out
-//! and takes back.
+//! for good, or one of the *ephemeral owls* (`owlet-01`), whose names roost
+//! passes from one ephemeral owl to the next.
 
 use serde::{Deserialize, Serialize};
 

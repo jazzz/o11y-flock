@@ -1,4 +1,4 @@
-//! The group operations flock fuzzes, behind one seam.
+//! The group operations an owl performs, behind one seam.
 //!
 //! flock targets GroupV3, which `create_group_conversation` creates. The
 //! client exposes no epoch fingerprint yet. Its stand-in is a hash of the
