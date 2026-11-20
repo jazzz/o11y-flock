@@ -77,6 +77,7 @@ pub enum Source {
     /// An operation failed.
     Send,
     AddMember,
+    RemoveMember,
     CreateGroup,
     /// libchat could not process an inbound frame.
     Inbound,
@@ -92,6 +93,7 @@ impl Source {
         match self {
             Self::Send => "send",
             Self::AddMember => "add_member",
+            Self::RemoveMember => "remove_member",
             Self::CreateGroup => "create_group",
             Self::Inbound => "inbound",
             Self::LibchatWarn => "libchat_warn",
@@ -132,6 +134,11 @@ pub enum Report {
         prev: Option<String>,
         next: String,
     },
+    /// Another member removed this owl from the group: this run is no longer
+    /// in it, and reports nothing more of it unless it is added again, which
+    /// starts with a `Commit` whose `prev` is `None`. Messages sent at the
+    /// fingerprint the run last reported were still owed to it.
+    Removed { group: String, ts_ms: i64 },
     /// Something that should not happen, made visible for debugging.
     Anomaly {
         ts_ms: i64,
@@ -151,6 +158,7 @@ impl Report {
             Self::Received { .. } => "received",
             Self::Members { .. } => "members",
             Self::Commit { .. } => "commit",
+            Self::Removed { .. } => "removed",
             Self::Anomaly { .. } => "anomaly",
         }
     }
@@ -171,6 +179,11 @@ pub struct Settings {
     pub posts_per_min: f64,
     /// Members a group adds per hour, shared among its members.
     pub adds_per_hour: f64,
+    /// Members a group removes per hour, shared among its members the same
+    /// way. A member removes only others, and only from a group of three or
+    /// more. Missing from an older roost, which means none.
+    #[serde(default)]
+    pub removes_per_hour: f64,
     pub min_body: usize,
     pub max_body: usize,
 }
@@ -286,6 +299,27 @@ mod tests {
         .unwrap();
         assert_eq!(req.operator, "");
         assert!(!req.ephemeral);
+    }
+
+    #[test]
+    fn settings_from_an_older_roost_remove_no_one() {
+        let s: Settings = serde_json::from_str(
+            r#"{"preset":"p","registry_url":"r","posts_per_min":1.0,"adds_per_hour":1.0,"min_body":1,"max_body":2}"#,
+        )
+        .unwrap();
+        assert_eq!(s.removes_per_hour, 0.0);
+    }
+
+    #[test]
+    fn a_removal_is_reported_by_kind() {
+        let r = Report::Removed {
+            group: "g".into(),
+            ts_ms: 1,
+        };
+        assert_eq!(serde_json::to_value(&r).unwrap()["kind"], "removed");
+        assert_eq!(r.kind(), "removed");
+        let v = serde_json::to_value(Source::RemoveMember).unwrap();
+        assert_eq!(v, Source::RemoveMember.as_str());
     }
 
     #[test]
