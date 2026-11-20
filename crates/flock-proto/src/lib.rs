@@ -9,32 +9,10 @@
 //!
 //! An identity is one of the named owls (`barn-01`), which an instance keeps
 //! for good, or one of the *ephemeral owls* (`owlet-01`), whose names roost
-//! passes from one ephemeral owl to the next.
+//! passes from one ephemeral owl to the next. roost picks the names: an owl
+//! learns its own from [`StartResp`].
 
 use serde::{Deserialize, Serialize};
-
-/// The named owls: slot `n` (1-based) is `OWL_NAMES[n - 1]`. An instance
-/// that has one keeps it, through restarts and outages.
-#[rustfmt::skip]
-pub const OWL_NAMES: [&str; 50] = [
-    "barn-01", "snowy-02", "great-horned-03", "barred-04", "burrowing-05",
-    "screech-06", "tawny-07", "little-08", "eagle-09", "great-grey-10",
-    "long-eared-11", "short-eared-12", "spotted-13", "elf-14", "pygmy-15",
-    "saw-whet-16", "boreal-17", "scops-18", "hawk-owl-19", "flammulated-20",
-    "ural-21", "barking-22", "powerful-23", "rufous-24", "morepork-25",
-    "boobook-26", "spectacled-27", "masked-28", "sooty-29", "grass-30",
-    "bay-31", "crested-32", "striped-33", "stygian-34", "fish-35",
-    "jungle-36", "collared-37", "buff-fronted-38", "mottled-39", "band-bellied-40",
-    "black-banded-41", "fulvous-42", "rusty-barred-43", "pharaoh-44", "vermiculated-45",
-    "pels-46", "maned-47", "laughing-48", "pearl-spotted-49", "humes-50",
-];
-
-/// Owlet `n` (1-based). roost registers owlets as they are wanted and hands
-/// each to any owl started as ephemeral, so an owlet's name says nothing
-/// about which owl process had it before.
-pub fn owlet_name(n: usize) -> String {
-    format!("owlet-{n:02}")
-}
 
 /// The longest operator roost keeps, in characters.
 pub const MAX_OPERATOR: usize = 64;
@@ -348,11 +326,5 @@ mod tests {
         assert_eq!(r.kind(), "removed");
         let v = serde_json::to_value(Source::RemoveMember).unwrap();
         assert_eq!(v, Source::RemoveMember.as_str());
-    }
-
-    #[test]
-    fn owlets_are_numbered() {
-        assert_eq!(owlet_name(1), "owlet-01");
-        assert_eq!(owlet_name(123), "owlet-123");
     }
 }
