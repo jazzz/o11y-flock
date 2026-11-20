@@ -51,6 +51,12 @@ depending on its kind:
   receive messages, so ephemeral owls can come and go without making groups
   look broken.
 
+Owls also remove each other from groups, as often as roost's settings say.
+An owl never removes itself, and removes only from a group of three or more.
+An owl that has been removed tells roost, which stops expecting it to receive
+the group's messages. If another owl adds it to the group again, it joins as
+new.
+
 ### In Docker
 
 In Docker, the owl's working directory, `/var/lib/owl`, is a volume.

@@ -1,6 +1,7 @@
 //! One owl's run: fetch identity and settings, build the client, create a
-//! group, then until stopped: grow its groups by adding owls, post to them,
-//! and report what it sends, receives and sees of them.
+//! group, then until stopped: grow its groups by adding owls, now and then
+//! remove one, post to them, and report what it sends, receives and sees of
+//! them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,6 +29,9 @@ use crate::{Args, anomaly};
 
 /// How often an owl rolls the dice on adding members.
 const DECIDE_EVERY: Duration = Duration::from_secs(10);
+/// The smallest group an owl removes a member from, so a group never shrinks
+/// to one owl.
+const MIN_TO_REMOVE: usize = 3;
 /// How often it checks each group for a membership change it was not told of.
 const CHECK_EVERY: Duration = Duration::from_secs(2);
 /// How often it refreshes the list of owls it may add.
@@ -368,6 +372,7 @@ impl Fuzzer<'_> {
             if now >= next_decide {
                 next_decide = now + DECIDE_EVERY;
                 self.maybe_grow();
+                self.maybe_shrink();
             }
             if now >= next_post {
                 next_post = now + self.post_gap();
@@ -410,7 +415,8 @@ impl Fuzzer<'_> {
     /// Reports a commit and the member list whenever this owl's view of a
     /// group moves: a new epoch, or more members at the same one (see
     /// [`Reading::is_news`]). A reading it does not trust waits for the next
-    /// check.
+    /// check. It stops following a group it has been removed from; if it is
+    /// added again, it joins it anew.
     fn check_membership(&mut self) {
         let now = Instant::now();
         let due: Vec<String> = self
@@ -421,6 +427,22 @@ impl Fuzzer<'_> {
             .collect();
         for id in due {
             self.groups.get_mut(&id).unwrap().next_check = now + CHECK_EVERY;
+            // libchat stops a removed member sending. A member list without
+            // this owl is not enough: auth can leave it out. Whether the list
+            // still has it is logged, to see which libchat does.
+            if !Groups::can_send(&*self.client, &id) {
+                let listed = self
+                    .client
+                    .member_accounts(&id)
+                    .map(|m| m.contains(&self.start.account));
+                info!(group = %short(&id), still_listed = ?listed.ok(), "removed from group");
+                self.groups.remove(&id);
+                self.rec.record(Report::Removed {
+                    group: id,
+                    ts_ms: self.clock.now(),
+                });
+                continue;
+            }
             // The epoch on both sides of the member list, so that the two
             // belong together: libchat's state moves underneath.
             let epoch = self.client.epoch(&id);
@@ -506,6 +528,54 @@ impl Fuzzer<'_> {
                 Err(err) => {
                     warn!(group = %short(&id), owl = %peer.owl, "add member: {err}");
                     self.anomaly(Source::AddMember, Some(&id), err);
+                }
+            }
+            if let Some(g) = self.groups.get_mut(&id) {
+                g.next_check = Instant::now();
+            }
+        }
+    }
+
+    /// Any member may remove another, never itself, from a group of at least
+    /// [`MIN_TO_REMOVE`]. Each rolls as for adds, so a group loses about
+    /// `removes_per_hour` whatever its size. An owl does not remove while its
+    /// own add to the group is still landing.
+    fn maybe_shrink(&mut self) {
+        let ids: Vec<String> = self.groups.keys().cloned().collect();
+        for id in ids {
+            let (Ok(members), Ok(pending)) = (
+                self.client.member_accounts(&id),
+                self.client.pending_accounts(&id),
+            ) else {
+                continue;
+            };
+            if members.len() < MIN_TO_REMOVE
+                || !pending.is_empty()
+                || !members.contains(&self.start.account)
+                || !Groups::can_send(&*self.client, &id)
+            {
+                continue;
+            }
+            let p = chance(self.settings().removes_per_hour, DECIDE_EVERY) / members.len() as f64;
+            if !self.rng.random_bool(p.min(1.0)) {
+                continue;
+            }
+            let Some(account) = members
+                .iter()
+                .filter(|a| **a != self.start.account)
+                .choose(&mut self.rng)
+                .cloned()
+            else {
+                continue;
+            };
+            let owl = self.name(&account);
+            match self.client.remove_member(&id, &account) {
+                Ok(()) => {
+                    info!(group = %short(&id), owl = %owl, size = members.len() - 1, "removed member")
+                }
+                Err(err) => {
+                    warn!(group = %short(&id), owl = %owl, "remove member: {err}");
+                    self.anomaly(Source::RemoveMember, Some(&id), err);
                 }
             }
             if let Some(g) = self.groups.get_mut(&id) {

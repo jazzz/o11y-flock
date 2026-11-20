@@ -10,8 +10,8 @@ version = "0.1.0"
 flock-proto = { path = "crates/flock-proto" }
 
 # libchat, pinned to a pushed rev. Bump both together, and roost's to match.
-logos-chat = { git = "https://github.com/logos-messaging/libchat", rev = "66fefb994d3c0fc651773f41963f329199566f3f" }
-crypto = { git = "https://github.com/logos-messaging/libchat", rev = "66fefb994d3c0fc651773f41963f329199566f3f" }
+logos-chat = { git = "https://github.com/logos-messaging/libchat", rev = "ce916b886f0379968804b7e62b154c4d5348e4bf" }
+crypto = { git = "https://github.com/logos-messaging/libchat", rev = "ce916b886f0379968804b7e62b154c4d5348e4bf" }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }

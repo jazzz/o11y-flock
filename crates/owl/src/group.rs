@@ -2,9 +2,12 @@
 //!
 //! flock targets GroupV3, which `create_group_conversation` creates. An
 //! owl's fingerprint of a group is a hash of the member list as it sees it,
-//! so two owls that disagree about who is in show up as a fork. With it, the
-//! owl reports libchat's MLS epoch and that epoch's fingerprint, which every
-//! member at the epoch shares unless the group forked.
+//! so two owls that disagree about who is in show up as a fork. Members are
+//! added and removed, so a group can come back to a member list it had
+//! before, and to its fingerprint: roost leaves out a commit back to an older
+//! fingerprint. With it, the owl reports libchat's MLS epoch and that epoch's
+//! fingerprint, which every member at the epoch shares unless the group
+//! forked, and which never come back.
 //!
 //! libchat's member list leaves out a member whose auth fails or cannot be
 //! decided, and logs why. Members change only in a new epoch, so at the same
@@ -22,6 +25,8 @@ pub trait Groups {
     /// Creates a group with only this owl in it.
     fn create_group(&mut self) -> Result<String, String>;
     fn add_member(&mut self, group: &str, account: &str) -> Result<(), String>;
+    /// Removes another member. libchat refuses to remove this owl itself.
+    fn remove_member(&mut self, group: &str, account: &str) -> Result<(), String>;
     /// Committed members' accounts.
     fn member_accounts(&self, group: &str) -> Result<HashSet<String>, String>;
     /// Accounts invited whose commit has not landed.
@@ -83,6 +88,11 @@ impl Groups for LogosChatClient {
 
     fn add_member(&mut self, group: &str, account: &str) -> Result<(), String> {
         self.add_group_participants(group, &[account])
+            .map_err(|e| e.to_string())
+    }
+
+    fn remove_member(&mut self, group: &str, account: &str) -> Result<(), String> {
+        self.remove_group_participants(group, &[account])
             .map_err(|e| e.to_string())
     }
 

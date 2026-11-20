@@ -2,8 +2,9 @@
 //!
 //! An owl gets an identity and the settings from roost with the flock key,
 //! builds its chat client on an embedded logos-delivery node, creates a group,
-//! and then adds other owls to groups and posts to them until it is stopped,
-//! reporting what it sends, receives and sees of its groups.
+//! and then adds other owls to groups, now and then removes one, and posts to
+//! them until it is stopped, reporting what it sends, receives and sees of its
+//! groups.
 
 mod anomaly;
 mod group;
