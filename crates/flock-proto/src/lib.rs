@@ -127,12 +127,22 @@ pub enum Report {
         ts_ms: i64,
         members: Vec<String>,
     },
-    /// The owl applied a commit. `prev` is `None` when it first joins.
+    /// The owl's view of the group moved: it applied a commit, or now sees
+    /// members that failed auth before. `prev` is `None` when it first joins,
+    /// and equals `next` when the epoch moved but the members did not.
     Commit {
         group: String,
         ts_ms: i64,
         prev: Option<String>,
         next: String,
+        /// The MLS epoch it is at, which only goes up. `None` from an owl
+        /// too old to say, or when libchat does not.
+        #[serde(default)]
+        epoch: Option<u64>,
+        /// libchat's fingerprint of that epoch, the same for every member
+        /// at it unless the group forked.
+        #[serde(default)]
+        epoch_fingerprint: Option<String>,
     },
     /// Another member removed this owl from the group: this run is no longer
     /// in it, and reports nothing more of it unless it is added again, which
@@ -273,6 +283,8 @@ mod tests {
             ts_ms: 1,
             prev: None,
             next: "ab".into(),
+            epoch: Some(3),
+            epoch_fingerprint: Some("e3".into()),
         };
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["kind"], "commit");
@@ -308,6 +320,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.removes_per_hour, 0.0);
+    }
+
+    #[test]
+    fn a_commit_from_an_older_owl_has_no_epoch() {
+        let r: Report = serde_json::from_str(
+            r#"{"kind":"commit","group":"g","ts_ms":1,"prev":null,"next":"ab"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            r,
+            Report::Commit {
+                epoch: None,
+                epoch_fingerprint: None,
+                ..
+            }
+        ));
     }
 
     #[test]

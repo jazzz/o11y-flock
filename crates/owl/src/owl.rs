@@ -21,7 +21,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use rand::seq::IteratorRandom;
 use tracing::{error, info, warn};
 
-use crate::group::{CONVO_TYPE, Groups, fingerprint};
+use crate::group::{CONVO_TYPE, Groups, Reading, fingerprint};
 use crate::recorder::Recorder;
 use crate::roost::{Roost, Started};
 use crate::{Args, anomaly};
@@ -111,7 +111,8 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     };
     info!(
         owl = %start.owl, run = start.run, instance = %req.instance, operator = %req.operator,
-        offset_ms = offset, "started"
+        offset_ms = offset, adds_per_hour = start.settings.adds_per_hour,
+        removes_per_hour = start.settings.removes_per_hour, "started"
     );
     // Everything after /start goes as this run.
     let roost = roost.with_token(&start.token);
@@ -262,6 +263,8 @@ fn installation(start: &StartResp) -> anyhow::Result<Installation> {
 struct Group {
     /// Where this owl last reported it is; `None` until the first check.
     fingerprint: Option<String>,
+    /// What it last reported of the group.
+    reading: Option<Reading>,
     next_check: Instant,
     activity: f64,
     activity_at: Instant,
@@ -272,6 +275,7 @@ impl Group {
         let now = Instant::now();
         Self {
             fingerprint: None,
+            reading: None,
             next_check: now,
             activity: 0.0,
             activity_at: now,
@@ -403,8 +407,10 @@ impl Fuzzer<'_> {
         }
     }
 
-    /// Reports a commit and the new member list whenever this owl's
-    /// fingerprint of a group moves.
+    /// Reports a commit and the member list whenever this owl's view of a
+    /// group moves: a new epoch, or more members at the same one (see
+    /// [`Reading::is_news`]). A reading it does not trust waits for the next
+    /// check.
     fn check_membership(&mut self) {
         let now = Instant::now();
         let due: Vec<String> = self
@@ -415,24 +421,38 @@ impl Fuzzer<'_> {
             .collect();
         for id in due {
             self.groups.get_mut(&id).unwrap().next_check = now + CHECK_EVERY;
+            // The epoch on both sides of the member list, so that the two
+            // belong together: libchat's state moves underneath.
+            let epoch = self.client.epoch(&id);
             let Ok(members) = self.client.member_accounts(&id) else {
                 continue;
             };
-            let fp = fingerprint(&members);
-            let g = self.groups.get_mut(&id).unwrap();
-            if g.fingerprint.as_ref() == Some(&fp) {
+            if self.client.epoch(&id) != epoch {
                 continue;
             }
+            let reading = Reading { epoch, members };
+            if !reading.is_news(&self.start.account, self.groups[&id].reading.as_ref()) {
+                continue;
+            }
+            let fp = fingerprint(&reading.members);
+            let mut members: Vec<String> = reading.members.iter().map(|a| self.name(a)).collect();
+            members.sort();
+            let (epoch, epoch_fingerprint) = match &reading.epoch {
+                Some(e) => (Some(e.number), Some(e.fingerprint.clone())),
+                None => (None, None),
+            };
+            let g = self.groups.get_mut(&id).unwrap();
             let prev = g.fingerprint.replace(fp.clone());
+            g.reading = Some(reading);
             let ts_ms = self.clock.now();
             self.rec.record(Report::Commit {
                 group: id.clone(),
                 ts_ms,
                 prev,
                 next: fp,
+                epoch,
+                epoch_fingerprint,
             });
-            let mut members: Vec<String> = members.iter().map(|a| self.name(a)).collect();
-            members.sort();
             self.rec.record(Report::Members {
                 group: id,
                 ts_ms,
