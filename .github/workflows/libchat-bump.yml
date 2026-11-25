@@ -1,0 +1,118 @@
+# Moves the owl to libchat's newest main, checked every hour:
+#
+#   1. If libchat's main has moved past the rev Cargo.toml pins, pin every
+#      libchat crate to it and relock.
+#   2. Check that the owl still compiles against it, with clippy. No Nix: with
+#      LOGOS_DELIVERY_LIB_DIR unset, the delivery bindings skip linking
+#      liblogosdelivery, so check and clippy still run. Linking and the Nix
+#      build happen in owl-image.yml.
+#   3. Push the bump to main, then run owl-image.yml on main, which publishes
+#      :latest and :sha-<12 hex>. A push made with this workflow's token
+#      starts no other workflow, but a workflow_dispatch does.
+#
+# A bump that fails the check goes to the branch libchat-bump, and the run
+# fails. Later runs skip that libchat rev until main moves, for example with a
+# fix to the owl, or libchat moves on.
+#
+# roost pins libchat too, only to provision accounts. This doesn't bump it.
+name: libchat bump
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: libchat-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compare with libchat's main
+        id: pins
+        run: |
+          old=$(sed -n -E 's/.*libchat", rev = "([0-9a-f]{40})".*/\1/p' Cargo.toml | head -1)
+          new=$(git ls-remote https://github.com/logos-messaging/libchat refs/heads/main | cut -f1)
+          test -n "$old" && test -n "$new"
+          echo "old=$old" >> "$GITHUB_OUTPUT"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          skip=false
+          if [ "$old" = "$new" ]; then
+            echo "Already on libchat ${new::7}"
+            skip=true
+          elif git ls-remote --exit-code origin refs/heads/libchat-bump > /dev/null; then
+            git fetch --quiet --depth=2 origin libchat-bump
+            if git show FETCH_HEAD:Cargo.toml | grep -q "$new" \
+              && [ "$(git rev-parse FETCH_HEAD^)" = "$(git rev-parse HEAD)" ]; then
+              echo "libchat ${new::7} already failed the check on this main; see branch libchat-bump"
+              skip=true
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.pins.outputs.skip == 'false'
+        with:
+          components: clippy
+
+      # hashgraph-like-consensus, under libchat, runs protoc in its build script.
+      - name: Install protoc
+        if: steps.pins.outputs.skip == 'false'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Pin libchat ${{ steps.pins.outputs.new }}
+        if: steps.pins.outputs.skip == 'false'
+        env:
+          NEW: ${{ steps.pins.outputs.new }}
+        run: |
+          sed -i -E "s|(libchat\", rev = \")[0-9a-f]{40}|\1$NEW|g" Cargo.toml
+          cargo update -p logos-chat
+          git diff --stat
+
+      - name: Check the owl against it
+        id: check
+        if: steps.pins.outputs.skip == 'false'
+        continue-on-error: true
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Commit
+        if: steps.pins.outputs.skip == 'false'
+        env:
+          OLD: ${{ steps.pins.outputs.old }}
+          NEW: ${{ steps.pins.outputs.new }}
+        run: |
+          log=$(gh api "repos/logos-messaging/libchat/compare/$OLD...$NEW" \
+            --jq '.commits[] | "- " + .sha[0:7] + " " + (.commit.message | split("\n")[0])')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -a -m "owl: on libchat ${NEW::7}" \
+            -m "Moves the owl from libchat ${OLD::7} to ${NEW::7}, libchat's main:" -m "$log"
+          git log -1 --format=%B
+
+      - name: Publish
+        if: steps.pins.outputs.skip == 'false' && steps.check.outcome == 'success'
+        run: |
+          git push origin HEAD:main
+          if git ls-remote --exit-code origin refs/heads/libchat-bump > /dev/null; then
+            git push origin --delete libchat-bump
+          fi
+          gh workflow run owl-image.yml --ref main
+
+      - name: Keep the failed bump on libchat-bump
+        if: steps.pins.outputs.skip == 'false' && steps.check.outcome == 'failure'
+        env:
+          NEW: ${{ steps.pins.outputs.new }}
+        run: |
+          git push --force origin HEAD:libchat-bump
+          echo "::error::The owl fails clippy against libchat ${NEW::7}. The bump is on branch libchat-bump."
+          exit 1

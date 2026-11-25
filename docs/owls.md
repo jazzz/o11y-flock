@@ -200,6 +200,13 @@ CI builds the image `ghcr.io/jazzz/flock-owl` for amd64 and arm64, in
 | `:sha-<12 hex>` | the same commits, and every release. This matches the `OWL_REV` that each owl reports to roost. |
 | `:1.2.3`, `:1.2` | the git tag `v1.2.3` |
 
+Owls follow libchat's main. Every hour,
+[libchat-bump.yml](../.github/workflows/libchat-bump.yml) checks it. If it
+has moved, the workflow pins the owl to it and checks that the owl still
+compiles. Then it pushes the bump to main and runs owl-image.yml, which
+publishes a new `:latest`. A bump that doesn't compile waits on the branch
+`libchat-bump` for a fix to the owl, and main keeps the libchat it had.
+
 The README's commands and compose.owls.yml use `:latest`. Docker downloads
 an image once and keeps using that copy, so each machine runs the build it
 last downloaded, until someone runs the update commands. roost's dashboard
@@ -234,6 +241,7 @@ crates/owl           one owl: a thin client on libchat's logos-chat crate
 docker/              owl.Dockerfile
 deploy/              compose.owls.yml (owls in Docker), owls.sh (without Docker)
 .github/workflows/   owl-image.yml: publishes the owl image
+                     libchat-bump.yml: moves the owl to libchat's main
 ```
 
 The owl links liblogosdelivery from libchat's Nix flake. Point the build at
@@ -243,8 +251,8 @@ a built copy:
 LOGOS_DELIVERY_LIB_DIR=/path/to/libchat/result/lib cargo build --release -p owl
 ```
 
-Without `LOGOS_DELIVERY_LIB_DIR`, libchat's build script runs `nix build`
-itself.
+Without `LOGOS_DELIVERY_LIB_DIR`, `cargo check` and `cargo clippy` still
+work, but linking fails.
 
 To build the image on your own machine:
 
