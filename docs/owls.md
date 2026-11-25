@@ -57,6 +57,14 @@ An owl that has been removed tells roost, which stops expecting it to receive
 the group's messages. If another owl adds it to the group again, it joins as
 new.
 
+### What owls tell roost
+
+Besides what it sends and receives and what it sees of its groups, an owl
+sends roost libchat's warnings and errors, and its own panics, as anomalies.
+
+Each sent and received message carries the ID libchat's SDS layer gave it,
+which is the same at every member.
+
 ### In Docker
 
 In Docker, the owl's working directory, `/var/lib/owl`, is a volume.
@@ -80,6 +88,31 @@ starts a new run with a new group, because libchat keeps its state only in
 memory.
 
 To stop an owl for good, send it SIGTERM.
+
+## Fork recovery
+
+roost can order an owl to ask a group to re-add it, when the owl has forked
+off that group. The owl picks up the order within about 5 seconds, when it
+next asks roost whether it is paused. Then libchat sends a request to the
+branch that outranks the owl's, naming one member of that branch. That
+member removes the owl and adds it back. The owl joins that branch and
+reports its new epoch as a commit.
+
+The owl carries out each order once and reports what came of it:
+
+- **asked**: libchat sent the request.
+- **not asked**: libchat sent nothing. It only asks when it sees the owl as
+  forked, from the beacons other members send, and when a member of the
+  other branch can answer.
+- **not in group**: the owl isn't a member of the group.
+- **failed**: libchat returned an error.
+
+The report also says where libchat saw the owl just before: synced,
+lagging, suspect, forked, or unknown.
+
+An order can ask the next member of that branch instead of the one asked
+before. Give the first member time to answer before sending one: if two
+members answer at once, the group forks again.
 
 ## Settings
 

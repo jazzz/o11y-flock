@@ -9,6 +9,7 @@ flock-proto = { workspace = true }
 # libchat
 crypto = { workspace = true }
 logos-chat = { workspace = true }
+logos-generic-chat = { workspace = true }
 
 anyhow = { workspace = true }
 clap = { workspace = true }

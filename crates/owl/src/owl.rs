@@ -3,7 +3,7 @@
 //! remove one, post to them, and report what it sends, receives and sees of
 //! them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc;
@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use crypto::Ed25519SigningKey;
 use flock_proto::{
-    MAX_OPERATOR, Payload, Peer, Report, Settings, Source, StartReq, StartResp, now_ms,
+    MAX_OPERATOR, Payload, Peer, ReAddOrder, ReAddOutcome, Report, Settings, Source, StartReq,
+    StartResp, now_ms,
 };
 use logos_chat::{
     AccountAddr, DbKey, Event, Installation, LogosChatClient, LogosConfig, P2pConfig, client_with,
@@ -38,7 +39,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(2);
 const PEERS_EVERY: Duration = Duration::from_secs(30);
 const CLOCK_RESYNC: Duration = Duration::from_secs(300);
 const CREATE_RETRY: Duration = Duration::from_secs(30);
-/// How often a running owl asks roost whether it is paused.
+/// How often a running owl asks roost whether it is paused, and for orders.
 const CONTROL_EVERY: Duration = Duration::from_secs(5);
 /// How often an owl that roost holds back (paused, or no identity free) asks
 /// to start again.
@@ -58,11 +59,13 @@ impl Clock {
     }
 }
 
-/// What the event thread tells the main loop.
+/// What the event and control threads tell the main loop.
 enum Notice {
     Joined(String),
     MembersChanged(String),
     Received(String),
+    /// roost's order to ask a forked group to re-add this owl.
+    ReAdd(ReAddOrder),
 }
 
 pub fn run(args: Args) -> anyhow::Result<()> {
@@ -98,6 +101,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         convo_type: CONVO_TYPE.into(),
         operator,
         ephemeral: args.ephemeral,
+        readds: true,
     };
     let mut held: Option<String> = None;
     let start = loop {
@@ -121,7 +125,13 @@ pub fn run(args: Args) -> anyhow::Result<()> {
     // Everything after /start goes as this run.
     let roost = roost.with_token(&start.token);
     let restart = Arc::new(AtomicBool::new(false));
-    watch_control(roost.clone(), stop.clone(), restart.clone())?;
+    let (notices, notice_rx) = mpsc::channel();
+    watch_control(
+        roost.clone(),
+        stop.clone(),
+        restart.clone(),
+        notices.clone(),
+    )?;
     anomaly::report_panics(roost.clone(), start.run, clock.clone());
 
     let settings = &start.settings;
@@ -139,7 +149,6 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 
     let (rec, uploader) = Recorder::start(roost.clone(), start.run);
     anomaly::connect(rec.clone(), clock.clone());
-    let (notices, notice_rx) = mpsc::channel();
     let event_thread = std::thread::Builder::new()
         .name("chat-events".into())
         .spawn({
@@ -162,6 +171,7 @@ pub fn run(args: Args) -> anyhow::Result<()> {
         peers: Vec::new(),
         names: HashMap::new(),
         sent: 0,
+        readds_done: HashSet::new(),
         rng: rand::rng(),
     };
     fuzzer.run(&notice_rx, &stop);
@@ -314,6 +324,9 @@ struct Fuzzer<'a> {
     names: HashMap<String, String>,
     /// Messages this run has sent.
     sent: u64,
+    /// The re-add orders this run has carried out: roost lists one until
+    /// its report arrives.
+    readds_done: HashSet<i64>,
     rng: rand::rngs::ThreadRng,
 }
 
@@ -365,6 +378,7 @@ impl Fuzzer<'_> {
                             g.bump();
                         }
                     }
+                    Notice::ReAdd(order) => self.readd(order),
                 }
             }
             self.check_membership();
@@ -584,6 +598,44 @@ impl Fuzzer<'_> {
         }
     }
 
+    /// Carries out roost's order to ask a forked group to re-add this owl,
+    /// once per order, and reports what came of it. libchat sends nothing
+    /// unless it sees this owl as forked. An owl that is re-added takes the
+    /// other branch's state from the Welcome, and reports it as a commit at
+    /// its next check.
+    fn readd(&mut self, order: ReAddOrder) {
+        if !self.readds_done.insert(order.id) {
+            return;
+        }
+        let (sync, sync_epoch) = self.client.sync_state(&order.group);
+        let (outcome, error) = if !self.groups.contains_key(&order.group) {
+            (ReAddOutcome::NotInGroup, None)
+        } else {
+            match self.client.ask_readd(&order.group, order.next) {
+                Ok(true) => (ReAddOutcome::Asked, None),
+                Ok(false) => (ReAddOutcome::NotAsked, None),
+                Err(err) => (ReAddOutcome::Failed, Some(err)),
+            }
+        };
+        info!(
+            group = %short(&order.group), order = order.id, next = order.next,
+            ?sync, ?sync_epoch, ?outcome, error = error.as_deref().unwrap_or(""), "re-add ordered by roost"
+        );
+        self.rec.record(Report::ReAdd {
+            group: order.group.clone(),
+            ts_ms: self.clock.now(),
+            order: order.id,
+            next: order.next,
+            sync,
+            sync_epoch,
+            outcome,
+            error,
+        });
+        if let Some(g) = self.groups.get_mut(&order.group) {
+            g.next_check = Instant::now();
+        }
+    }
+
     /// Posts one message, to a group chosen by its recent activity.
     fn post(&mut self) {
         let now = Instant::now();
@@ -620,12 +672,13 @@ impl Fuzzer<'_> {
         self.sent += 1;
         let ts_ms = self.clock.now();
         match self.client.send(&id, &payload.encode()) {
-            Ok(()) => {
+            Ok(sds_id) => {
                 self.rec.record(Report::Sent {
                     msg_id: payload.msg_id,
                     group: id.clone(),
                     ts_ms,
                     fingerprint,
+                    sds_id: Some(sds_id),
                 });
                 self.groups.get_mut(&id).unwrap().bump();
             }
@@ -677,7 +730,10 @@ fn inbound(event: Event, own: &str, rec: &Recorder, clock: &Clock, notices: &mps
             let _ = notices.send(Notice::MembersChanged(convo_id.to_string()));
         }
         Event::MessageReceived {
-            convo_id, content, ..
+            convo_id,
+            content,
+            message_id,
+            ..
         } => {
             let ts_ms = clock.now();
             let Some(p) = Payload::decode(&content) else {
@@ -691,6 +747,7 @@ fn inbound(event: Event, own: &str, rec: &Recorder, clock: &Clock, notices: &mps
                 msg_id: p.msg_id,
                 group: group.clone(),
                 ts_ms,
+                sds_id: Some(message_id),
             });
             let _ = notices.send(Notice::Received(group));
         }
@@ -706,13 +763,15 @@ fn inbound(event: Event, own: &str, rec: &Recorder, clock: &Clock, notices: &mps
 }
 
 /// Sets `restart` and `stop` once roost pauses this owl or has given its
-/// identity to another instance, which ends the run as SIGTERM does. Asking
-/// keeps this instance's claim on the identity alive. Runs until `stop` is
-/// set either way.
+/// identity to another instance, which ends the run as SIGTERM does, and
+/// passes roost's re-add orders to the main loop. Asking keeps this
+/// instance's claim on the identity alive. Runs until `stop` is set either
+/// way.
 fn watch_control(
     roost: Roost,
     stop: Arc<AtomicBool>,
     restart: Arc<AtomicBool>,
+    notices: mpsc::Sender<Notice>,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("control".into())
@@ -723,6 +782,9 @@ fn watch_control(
                 match roost.control() {
                     Ok(c) => {
                         failing = false;
+                        for order in c.readds {
+                            let _ = notices.send(Notice::ReAdd(order));
+                        }
                         if c.paused || c.superseded {
                             if c.superseded {
                                 info!("another owl process has this identity now: shutting the client down");

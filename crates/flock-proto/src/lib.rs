@@ -93,11 +93,18 @@ pub enum Report {
         group: String,
         ts_ms: i64,
         fingerprint: String,
+        /// The ID libchat's SDS layer gave the message, the same at every
+        /// member. `None` from an owl too old to say.
+        #[serde(default)]
+        sds_id: Option<String>,
     },
     Received {
         msg_id: String,
         group: String,
         ts_ms: i64,
+        /// As in [`Report::Sent`].
+        #[serde(default)]
+        sds_id: Option<String>,
     },
     /// The group's members as this owl now sees them, by owl name.
     Members {
@@ -137,6 +144,63 @@ pub enum Report {
         #[serde(default)]
         location: Option<String>,
     },
+    /// The owl carried out a [`ReAddOrder`]. It reports each order once.
+    #[serde(rename = "readd")]
+    ReAdd {
+        group: String,
+        ts_ms: i64,
+        /// The order's [`ReAddOrder::id`].
+        order: i64,
+        /// Whether the order asked the next member, as [`ReAddOrder::next`].
+        next: bool,
+        /// Where libchat said this owl stood in the group just before.
+        sync: SyncState,
+        /// The epoch `sync` names: for `lagging` the peer's, for `suspect`
+        /// the one a commit would not apply at, for `forked` the epoch the
+        /// fork is at or before. `None` for the other states.
+        #[serde(default)]
+        sync_epoch: Option<u64>,
+        outcome: ReAddOutcome,
+        /// libchat's error, when `outcome` is `failed`.
+        #[serde(default)]
+        error: Option<String>,
+    },
+}
+
+/// Where libchat says a member stands in a GroupV3 group, judged from the
+/// signed beacons other members send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncState {
+    /// No evidence yet, or a state this owl doesn't know.
+    Unknown,
+    /// A peer holds the same state at this member's epoch.
+    Synced,
+    /// A peer is at a later epoch: this member may be behind, on that
+    /// branch or another.
+    Lagging,
+    /// A commit for this member's epoch would not apply. Only a hint.
+    Suspect,
+    /// Verified beacons name other states at epochs this member held.
+    Forked,
+}
+
+/// What came of a [`ReAddOrder`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReAddOutcome {
+    /// libchat sent the request to the other branch. One of its members
+    /// removes and re-adds this owl, which then reports a `Commit` on that
+    /// branch.
+    Asked,
+    /// libchat sent nothing: no branch outranks this owl's, no member of it
+    /// can answer, or libchat no longer holds the state the fork is at. A
+    /// member that isn't `forked` is never asked.
+    NotAsked,
+    /// The owl isn't in the group: it never was, or it was removed.
+    NotInGroup,
+    /// libchat returned an error; see `error`.
+    Failed,
 }
 
 impl Report {
@@ -148,6 +212,7 @@ impl Report {
             Self::Commit { .. } => "commit",
             Self::Removed { .. } => "removed",
             Self::Anomaly { .. } => "anomaly",
+            Self::ReAdd { .. } => "readd",
         }
     }
 }
@@ -206,6 +271,10 @@ pub struct StartReq {
     /// Asks for an owlet rather than a named owl.
     #[serde(default)]
     pub ephemeral: bool,
+    /// The owl carries out [`Control::readds`]. An older owl doesn't say,
+    /// and ignores them.
+    #[serde(default)]
+    pub readds: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +310,28 @@ pub struct Control {
     /// asks for an identity again.
     #[serde(default)]
     pub superseded: bool,
+    /// Fork recoveries roost wants this run to start. roost lists an order
+    /// until the owl's [`Report::ReAdd`] for it arrives. The owl carries out
+    /// each order once, however often it is listed. Missing from an older
+    /// roost, which means none.
+    #[serde(default)]
+    pub readds: Vec<ReAddOrder>,
+}
+
+/// roost asks a forked owl to be re-added to a group. libchat seals a
+/// request to the branch that outranks the owl's and names one of that
+/// branch's members, who removes the owl's stale leaf and adds it back with
+/// a fresh one. Orders belong to the run whose token fetched them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReAddOrder {
+    /// roost's ID for the order, unique for good.
+    pub id: i64,
+    pub group: String,
+    /// Name the next member of that branch, not the one asked before. Ask
+    /// again with this only once the first answer had time to land: two
+    /// members answering at once fork the group again.
+    #[serde(default)]
+    pub next: bool,
 }
 
 /// `POST /reports`
@@ -289,6 +380,7 @@ mod tests {
         .unwrap();
         assert_eq!(req.operator, "");
         assert!(!req.ephemeral);
+        assert!(!req.readds);
     }
 
     #[test]
@@ -326,5 +418,66 @@ mod tests {
         assert_eq!(r.kind(), "removed");
         let v = serde_json::to_value(Source::RemoveMember).unwrap();
         assert_eq!(v, Source::RemoveMember.as_str());
+    }
+
+    #[test]
+    fn traffic_from_an_older_owl_has_no_sds_id() {
+        let r: Report =
+            serde_json::from_str(r#"{"kind":"received","msg_id":"o/1/2","group":"g","ts_ms":1}"#)
+                .unwrap();
+        assert!(matches!(r, Report::Received { sds_id: None, .. }));
+    }
+
+    #[test]
+    fn control_from_an_older_roost_orders_no_readds() {
+        let c: Control = serde_json::from_str(r#"{"paused":false}"#).unwrap();
+        assert!(c.readds.is_empty());
+        let c: Control = serde_json::from_str(
+            r#"{"paused":false,"readds":[{"id":7,"group":"g"},{"id":8,"group":"g","next":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            c.readds,
+            [
+                ReAddOrder {
+                    id: 7,
+                    group: "g".into(),
+                    next: false
+                },
+                ReAddOrder {
+                    id: 8,
+                    group: "g".into(),
+                    next: true
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_readd_is_reported_flat_by_kind() {
+        let r = Report::ReAdd {
+            group: "g".into(),
+            ts_ms: 1,
+            order: 7,
+            next: false,
+            sync: SyncState::Forked,
+            sync_epoch: Some(7),
+            outcome: ReAddOutcome::NotInGroup,
+            error: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(r.kind(), "readd");
+        assert_eq!(v["kind"], "readd");
+        assert_eq!(v["sync"], "forked");
+        assert_eq!(v["outcome"], "not_in_group");
+        let back: Report = serde_json::from_value(v).unwrap();
+        assert!(matches!(
+            back,
+            Report::ReAdd {
+                order: 7,
+                outcome: ReAddOutcome::NotInGroup,
+                ..
+            }
+        ));
     }
 }

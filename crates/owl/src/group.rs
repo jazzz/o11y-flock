@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-use flock_proto::GROUP_NAME;
+use flock_proto::{GROUP_NAME, SyncState};
 use logos_chat::{GroupMetadata, LogosChatClient};
 
 /// What roost shows as the group's type.
@@ -35,7 +35,14 @@ pub trait Groups {
     fn epoch(&self, group: &str) -> Option<Epoch>;
     fn is_flock_group(&self, group: &str) -> bool;
     fn can_send(&self, group: &str) -> bool;
-    fn send(&mut self, group: &str, content: &[u8]) -> Result<(), String>;
+    /// Sends a message, and returns the ID libchat's SDS layer gave it.
+    fn send(&mut self, group: &str, content: &[u8]) -> Result<String, String>;
+    /// Where libchat says this owl stands in the group, and the epoch that
+    /// state names (see [`flock_proto::Report::ReAdd`]).
+    fn sync_state(&self, group: &str) -> (SyncState, Option<u64>);
+    /// Asks a forked group to re-add this owl, naming the member asked
+    /// before, or with `next` the next one. Whether a request went out.
+    fn ask_readd(&mut self, group: &str, next: bool) -> Result<bool, String>;
 }
 
 /// An MLS epoch of a group, as libchat reports it.
@@ -131,10 +138,28 @@ impl Groups for LogosChatClient {
         LogosChatClient::can_send(self, group)
     }
 
-    fn send(&mut self, group: &str, content: &[u8]) -> Result<(), String> {
-        self.send_message(group, content)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+    fn send(&mut self, group: &str, content: &[u8]) -> Result<String, String> {
+        self.send_message(group, content).map_err(|e| e.to_string())
+    }
+
+    fn sync_state(&self, group: &str) -> (SyncState, Option<u64>) {
+        use logos_chat::SyncState as S;
+        match self.group_sync_state(group) {
+            Ok(S::Synced) => (SyncState::Synced, None),
+            Ok(S::Lagging { peer_epoch }) => (SyncState::Lagging, Some(peer_epoch)),
+            Ok(S::Suspect { epoch }) => (SyncState::Suspect, Some(epoch)),
+            Ok(S::Forked { at_or_before }) => (SyncState::Forked, Some(at_or_before)),
+            _ => (SyncState::Unknown, None),
+        }
+    }
+
+    fn ask_readd(&mut self, group: &str, next: bool) -> Result<bool, String> {
+        let sent = if next {
+            self.retry_readd(group)
+        } else {
+            self.request_readd(group)
+        };
+        sent.map(|n| n > 0).map_err(|e| e.to_string())
     }
 }
 
