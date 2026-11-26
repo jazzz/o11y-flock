@@ -10,11 +10,11 @@ version = "0.1.0"
 flock-proto = { path = "crates/flock-proto" }
 
 # libchat, pinned to a pushed rev. Bump all three together, and roost's to match.
-logos-chat = { git = "https://github.com/logos-messaging/libchat", rev = "92cfdde86bdb692f6e5e6e30f61f02ec71093260" }
-crypto = { git = "https://github.com/logos-messaging/libchat", rev = "92cfdde86bdb692f6e5e6e30f61f02ec71093260" }
+logos-chat = { git = "https://github.com/logos-messaging/libchat", rev = "661ee71523b08ea6ed7ebcee08ce186731833fb8" }
+crypto = { git = "https://github.com/logos-messaging/libchat", rev = "661ee71523b08ea6ed7ebcee08ce186731833fb8" }
 # Only for its `debug-data` feature, which `Client::debug_data` needs: the epoch
 # an owl reports. logos-chat re-exports this crate.
-logos-generic-chat = { git = "https://github.com/logos-messaging/libchat", rev = "92cfdde86bdb692f6e5e6e30f61f02ec71093260", features = ["debug-data"] }
+logos-generic-chat = { git = "https://github.com/logos-messaging/libchat", rev = "661ee71523b08ea6ed7ebcee08ce186731833fb8", features = ["debug-data"] }
 
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
